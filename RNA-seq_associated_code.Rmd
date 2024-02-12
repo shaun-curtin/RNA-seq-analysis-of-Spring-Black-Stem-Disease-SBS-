@@ -1,0 +1,682 @@
+---
+title: "RNA-seq associated code"
+output:
+    rmdformats::readthedown:
+    code_folding: hide
+    self_contained: true
+    number_sections: False
+    highlight: pygments
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+<style type="text/css">
+
+body{ /* Normal  */
+   font-size: 14px;
+}
+td {  /* Table  */
+   font-size: 8px;
+}
+h1 { /* Header 1 */
+ font-size: 28px;
+ color: DarkBlue;
+}
+h2 { /* Header 2 */
+ font-size: 20px;
+ color: DarkBlue;
+}
+h3 { /* Header 3 */
+ font-size: 16px;
+ color: DarkBlue;
+}
+code.r{ /* Code block */
+  font-size: 12px;
+}
+pre { /* Code block */
+  font-size: 12px
+}
+</style>
+
+-------------
+
+
+## Read Processing {.tabset .tabset-fade .tabset-pills}
+
+### Filter and trim reads
+```{bash,k1, eval=FALSE}
+#!/bin/bash 
+#SBATCH -N 1
+#SBATCH -n 120
+#SBATCH --time=96:00:00      
+#SBATCH -o /home/curti242/botki009/trim4.o
+#SBATCH -e /home/curti242/botki009/trim4.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=trim4.sh
+#SBATCH --mem=100G 
+
+#how to submit job:  sbatch -p agsmall --array [1-52] ~/scripts/trim4.sh
+
+ID=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch.global/botki009/rna/samples.txt)
+
+cd /scratch.global/botki009/rna
+
+module load fastqc
+module load cutadapt
+
+~/software/trimgalore/TrimGalore-0.6.6/trim_galore --illumina --quality 30 --length 50 --fastqc --paired ${ID}_R1_001.fastq.gz ${ID}_R2_001.fastq.gz -o /scratch.global/botki009/rna/trimmed
+
+```
+
+### MultiQC
+```{bash,k2, eval=FALSE}
+
+/home/curti242/botki009/.local/bin/multiqc /scratch.global/botki009/rna/trimmed/fastqc_reports
+```
+
+### Zip reads
+```{bash,l11, eval=FALSE}
+#!/bin/bash 
+#SBATCH -N 1
+#SBATCH -n 40
+#SBATCH --time=24:00:00      
+#SBATCH -o /home/curti242/botki009/gz.o
+#SBATCH -e /home/curti242/botki009/gz.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=gz.sh
+#SBATCH --mem=40G 
+
+#how to submit job:  sbatch -p agsmall --array [1-52] ~/scripts/gz.sh
+
+ID=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch.global/botki009/rna/samples.txt)
+
+cd /scratch.global/botki009/rna_project/trimmed_reads
+
+gzip -c ${ID}_R1_001_val_1.fq > ${ID}_R1_001_val_1.fq.gz
+gzip -c ${ID}_R2_001_val_2.fq > ${ID}_R2_001_val_2.fq.gz
+
+```
+
+
+## Read Mapping {.tabset .tabset-fade .tabset-pills}
+### Prepare genome for mapping
+```{bash,l1, eval=FALSE}
+#!/bin/bash -l
+#SBATCH -N 1
+#SBATCH -n 40
+#SBATCH --time=6:00:00
+#SBATCH -o /home/curti242/botki009/e_o_files/star_a17.o
+#SBATCH -e /home/curti242/botki009/e_o_files/star_a17.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=star_a17.sh
+#SBATCH --mem=40G
+
+module load star/2.5.3a
+cd /scratch.global/botki009/rna_project/genomes/a17
+
+STAR --runThreadN 30 --limitGenomeGenerateRAM 90000000000 --runMode genomeGenerate --genomeDir /scratch.global/botki009/rna_project/genomes/a17 --sjdbGTFfile /home/curti242/botki009/medicago/a17/MtrunA17r5.0-ANR-EGN-r1.9.gtf --sjdbOverhang 149 --genomeFastaFiles MtrunA17r5.0-20161119-ANR.genome.fasta
+
+```
+
+### Align RNA to genome
+```{bash,l2, eval=FALSE}
+#!/bin/bash -l
+#SBATCH -N 1
+#SBATCH -n 40
+#SBATCH --time=96:00:00
+#SBATCH -o /home/curti242/botki009/e_o_files/star_map_a17.o
+#SBATCH -e /home/curti242/botki009/e_o_files/star_map_a17.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=star_map_a17.sh
+#SBATCH --mem=50G
+
+#how to submit job:  sbatch --array [1-52] ~/scripts/star_map_a17.sh
+
+module load star/2.5.3a
+
+ID=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch.global/botki009/rna_project/samples.txt)
+
+cd /scratch.global/botki009/rna_project/mapping/a17
+
+STAR --runThreadN 40 \
+	--twopassMode Basic \
+	--outFileNamePrefix ${ID}_mapped_to_a17 \
+	--outSAMtype BAM SortedByCoordinate \
+	--genomeDir /scratch.global/botki009/rna_project/genomes/a17 \
+	--readFilesCommand gunzip -c \
+	--outSAMunmapped Within \ 
+	--quantMode GeneCounts \
+	--readFilesIn /scratch.global/botki009/rna_project/trimmed_reads/zipped/${ID}_R1_001_val_1.fq.gz /scratch.global/botki009/rna_project/trimmed_reads/zipped/${ID}_R2_001_val_2.fq.gz
+
+```
+
+
+## Process mapping files {.tabset .tabset-fade .tabset-pills}
+
+### Index BAMs
+```{bash,k21, eval=FALSE}
+
+#!/bin/bash -l
+#SBATCH -N 1
+#SBATCH -n 40
+#SBATCH --time=6:00:00
+#SBATCH -o /home/curti242/botki009/ind2.o
+#SBATCH -e /home/curti242/botki009/ind2.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=ind2.sh
+#SBATCH --mem=20G
+
+#how to submit job:  sbatch --array [1-52] ~/scripts/ind2.sh
+
+ID=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch.global/botki009/rna_project/samples.txt)
+
+module load samtools 
+
+cd /scratch.global/botki009/rna_project/mapping/a17/bam
+
+samtools index ${ID}_mapped_to_a17Aligned.sortedByCoord.out.bam
+```
+
+### Filter Alignments
+```{bash,k22, eval=FALSE}
+#!/bin/bash -l
+#SBATCH -N 1
+#SBATCH -n 80
+#SBATCH --time=2:00:00
+#SBATCH -o /home/curti242/botki009/filter1.o
+#SBATCH -e /home/curti242/botki009/filter1.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=filter1.sh
+#SBATCH --mem=40G
+
+#how to submit job:  sbatch --array [1-52] ~/scripts/filter1.sh
+
+ID=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch.global/botki009/rna_project/samples.txt)
+
+module load samtools 
+
+cd /scratch.global/botki009/rna_project/mapping/a17/bam/
+
+samtools view -O BAM -q 255 -f 0x2 -m 100 ${ID}_mapped_to_a17Aligned.sortedByCoord.out.bam > /scratch.global/botki009/rna_project/mapping/${ID}_mapped_to_a17_paired_uniq.bam
+```
+
+### MulitQC
+```{bash,l211, eval=FALSE}
+/home/curti242/botki009/.local/bin/multiqc /scratch.global/botki009/rna_project/mapping
+```
+
+
+
+## Count mapped reads {.tabset .tabset-fade .tabset-pills}
+
+### Sort BAMs
+```{bash,k31, eval=FALSE}
+#!/bin/bash 
+#SBATCH -N 1
+#SBATCH -n 40
+#SBATCH --time=2:00:00      
+#SBATCH -o /home/curti242/botki009/st.o
+#SBATCH -e /home/curti242/botki009/st.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=st.sh
+#SBATCH --mem=10G 
+
+#how to submit job:  sbatch --array [1-51] ~/scripts/st.sh
+
+ID=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch.global/botki009/rna_project/samples2.txt)
+
+module load python2/2.7.12_anaconda4.2
+module load htseq/0.11.0 
+
+cd /scratch.global/botki009/rna_project/mapping/a17/bam/uniq_mapping/
+
+module load samtools 
+
+samtools sort -O BAM -n -o ${ID}_mapped_to_a17_paired_uniq_sorted.bam ${ID}_mapped_to_a17_paired_uniq.bam 
+```
+
+### HT-seq count
+```{bash,k32, eval=FALSE}
+#!/bin/bash 
+#SBATCH -N 1
+#SBATCH -n 40
+#SBATCH --time=4:00:00      
+#SBATCH -o /home/curti242/botki009/ht4.o
+#SBATCH -e /home/curti242/botki009/ht4.e
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=botki009@umn.edu
+#SBATCH --job-name=ht4.sh
+#SBATCH --mem=20G 
+
+#how to submit job:  sbatch --array [1-48] ~/scripts/ht4.sh
+
+ID=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch.global/botki009/rna_project/samples2.txt)
+
+module load python2/2.7.12_anaconda4.2
+module load htseq/0.11.0 
+
+cd /scratch.global/botki009/rna_project/mapping/a17/bam/uniq_mapping/
+
+htseq-count -s reverse -f bam -r name -t exon -i locus_tag ${ID}_mapped_to_a17_paired_uniq_sorted.bam ~/MtrunA17r5.0-ANR-EGN-r1.9.clean.gtf > /scratch.global/botki009/rna_project/mapping/a17/bam/uniq_mapping/htseq_count_s
+_rev/${ID}_feature_counts.txt
+```
+
+
+## EdgeR transciptome analysis {.tabset .tabset-fade .tabset-pills}
+
+### Differential Expression analysis 
+```{bash,k42, eval=FALSE}
+setwd("/Users/jakebotkin/Desktop/RNA-SEQ-MS-files/SUBMISSION/")
+library(BiocManager)
+library(edgeR)
+library(tidyverse)
+library(writexl)
+library(ComplexHeatmap)
+library(ggplot2)
+
+#Get counts data
+cts <- read.delim("feature_count_matrix.txt", head=T, sep="\t",row.names=1)
+genes<-row.names(cts)
+cts<-as.data.frame(row.names=genes,lapply(cts,as.numeric))
+
+### Filter out very low expressed genes
+cts<-cts[which(rowSums(cts)>1),]
+
+### Set up experimental design
+samples=colnames(cts)
+exp= data.frame(row.names=samples, 
+                hpi=c("24","24","24","48","48","48","72","72","72","24","24","24","48","48","48","72","72","72","24","24","24","48","48","48","72","72","72","24","24","24","48","48","48","72","72","72"),
+                genotype=c("HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","HM078","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17","A17"),
+                treatment=c("inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","mock","mock","mock","mock","mock","mock","mock","mock","mock","inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","inoculated","mock","mock","mock","mock","mock","mock","mock","mock","mock"))
+
+#Add groups 
+exp$Group <- paste(exp$genotype, exp$treatment, exp$hpi, sep='.')
+
+#Assign groups, define DGE list
+d <- DGEList(counts=cts, group=exp$Group)
+dim(d)
+
+#Design matrix GLM
+Group<-exp$Group
+design <- model.matrix(~0+Group, data=d$samples)
+
+#Filter counts
+keep <- filterByExpr(d,design)
+table(keep)
+d <- d[keep,]
+dim(d)
+
+#Calculate norm factors
+d <- calcNormFactors(d)
+
+#Estimate dispersions along groups defined in design matrix
+d <- estimateDisp(d, design)
+
+#Set up contrasts matrix 
+fit <- glmQLFit(d, design)
+
+#Normalized log counts of all genes 
+norm_cpm <- cpm(d, log=TRUE, normalized=TRUE)
+
+### Run comparisons
+contrasts_within_time <- makeContrasts(RI.24_vs_RM.24 = GroupHM078.inoculated.24-GroupHM078.mock.24,#effect of pathogen on resistant at 24 hours
+                                       RI.48_vs_RM.48 = GroupHM078.inoculated.48-GroupHM078.mock.48,#effect of pathogen on resistant at 48 hours
+                                       RI.72_vs_RM.72 = GroupHM078.inoculated.72-GroupHM078.mock.72,#effect of pathogen on resistant at 72 hours
+                                       
+                                       SI.24_vs_SM.24 = GroupA17.inoculated.24-GroupA17.mock.24,#effect of pathogen on susceptible at 24 hours
+                                       SI.48_vs_SM.48 = GroupA17.inoculated.48-GroupA17.mock.48,#effect of pathogen on susceptible at 48 hours
+                                       SI.72_vs_SM.72 = GroupA17.inoculated.72-GroupA17.mock.72,#effect of pathogen on susceptible at 72 hours
+                                       
+                                       R.24_vs_S.24 = (GroupHM078.inoculated.24-GroupHM078.mock.24)-(GroupA17.inoculated.24-GroupA17.mock.24),#find genes responding differently between resistant and susceptible at 24 hours
+                                       R.48_vs_S.48 = (GroupHM078.inoculated.48-GroupHM078.mock.48)-(GroupA17.inoculated.48-GroupA17.mock.48),#find genes responding differently between resistant and susceptible at 48 hours
+                                       R.72_vs_S.72 = (GroupHM078.inoculated.72-GroupHM078.mock.72)-(GroupA17.inoculated.72-GroupA17.mock.72),#find genes responding differently between resistant and susceptible at 72 hours
+                                       levels =design)
+
+qlf_R24 <- glmQLFTest(fit, contrast=contrasts_within_time[,"RI.24_vs_RM.24"])
+qlf_R48 <- glmQLFTest(fit, contrast=contrasts_within_time[,"RI.48_vs_RM.48"])
+qlf_R72 <- glmQLFTest(fit, contrast=contrasts_within_time[,"RI.72_vs_RM.72"])
+qlf_S24 <- glmQLFTest(fit, contrast=contrasts_within_time[,"SI.24_vs_SM.24"])
+qlf_S48 <- glmQLFTest(fit, contrast=contrasts_within_time[,"SI.48_vs_SM.48"])
+qlf_S72 <- glmQLFTest(fit, contrast=contrasts_within_time[,"SI.72_vs_SM.72"])
+qlf_RS_24 <- glmQLFTest(fit, contrast=contrasts_within_time[,"R.24_vs_S.24"])#find genes responding differently between resistant and susceptible at 24 hours
+qlf_RS_48 <- glmQLFTest(fit, contrast=contrasts_within_time[,"R.48_vs_S.48"])#find genes responding differently between resistant and susceptible at 48 hours
+qlf_RS_72 <- glmQLFTest(fit, contrast=contrasts_within_time[,"R.72_vs_S.72"])#find genes responding differently between resistant and susceptible at 72 hours
+
+t_R24<- as.data.frame(topTags(qlf_R24,n=10000,sort.by="logFC", p.value = 0.05, adjust.method = "BH"))
+t_R48<- as.data.frame(topTags(qlf_R48,n=10000,sort.by="logFC", p.value = 0.05, adjust.method = "BH"))
+t_R72<- as.data.frame(topTags(qlf_R72,n=10000,sort.by="logFC", p.value = 0.05, adjust.method = "BH"))
+t_S24<- as.data.frame(topTags(qlf_S24,n=10000,sort.by="logFC", p.value = 0.05, adjust.method = "BH"))
+t_S48<- as.data.frame(topTags(qlf_S48,n=10000,sort.by="logFC", p.value = 0.05, adjust.method = "BH"))
+t_S72<- as.data.frame(topTags(qlf_S72,n=10000,sort.by="logFC", p.value = 0.05, adjust.method = "BH"))
+
+### Summarize DEG data 
+df1 <- t_R24 %>% add_column(Comparison = "Resistant inoculated vs mock 24 hpi")
+df2 <- t_R48 %>% add_column(Comparison = "Resistant inoculated vs mock 48 hpi")
+df3 <- t_R72 %>% add_column(Comparison = "Resistant inoculated vs mock 72 hpi")
+df4 <- t_S24 %>% add_column(Comparison = "Susceptible inoculated vs mock 24 hpi")
+df5 <- t_S48 %>% add_column(Comparison = "Susceptible inoculated vs mock 48 hpi")
+df6 <- t_S72 %>% add_column(Comparison= "Susceptible inoculated vs mock 72 hpi")
+
+df1$genes<-row.names(df1)
+df2$genes<-row.names(df2)
+df3$genes<-row.names(df3)
+df4$genes<-row.names(df4)
+df5$genes<-row.names(df5)
+df6$genes<-row.names(df6)
+
+#combine dfs
+all_DEGs<-rbind(df1,df2,df3,df4,df5,df6, make.row.names = FALSE)
+
+
+### Print results
+
+#Filter by LogFC
+mydata<- filter(all_DEGs, logFC>= 1 | logFC<=-1)
+
+#Write to file
+write_xlsx(mydata, path = "ALL_DEGs_logFC1_FDR0.05.xlsx")
+
+```
+
+
+## Venn diagrams {.tabset .tabset-fade .tabset-pills}
+
+### A17
+```{bash,k71, eval=FALSE}
+library(ggvenn)
+### A BETTER VENN DIAGRAM ### 
+?ggvenn
+
+
+### A17 total gene expression ### 
+x <- list(
+  '24 hpi' = row.names(t_S24f), 
+  '48 hpi' = row.names(t_S48f), 
+  '72 hpi' = row.names(t_S72f))
+ggvenn(x, c('24 hpi','48 hpi','72 hpi'),fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+       stroke_size = 0.5, set_name_size = 6, text_size = 6,show_percentage = F)+
+       ggtitle("DE genes for A17 inoculated vs mock")
+
+
+### A17 upregulated ### 
+t_S24_up<-filter(t_S24f, logFC>= 0)
+t_S48_up<-filter(t_S48f, logFC>= 0)
+t_S72_up<-filter(t_S72f, logFC>= 0)
+a <- list(
+  '24 hpi' = row.names(t_S24_up), 
+  '48 hpi' = row.names(t_S48_up), 
+  '72 hpi' = row.names(t_S72_up))
+ggvenn(a, c('24 hpi','48 hpi','72 hpi'),fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+       stroke_size = 0.5,set_name_size = 6, text_size = 6,show_percentage = F)+
+  ggtitle("Upregulated DE genes for A17 inoculated vs mock")
+
+### A17 downregulated ### 
+t_S24_d<-filter(t_S24f, logFC<= 0)
+t_S48_d<-filter(t_S48f, logFC<= 0)
+t_S72_d<-filter(t_S72f, logFC<= 0)
+b <- list(
+  '24 hpi' = row.names(t_S24_d), 
+  '48 hpi' = row.names(t_S48_d), 
+  '72 hpi' = row.names(t_S72_d))
+ggvenn(b, c('24 hpi','48 hpi','72 hpi'),fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+       stroke_size = 0.5, set_name_size = 6, text_size = 6,show_percentage = F)+
+  ggtitle("Downregulated DE genes for A17 inoculated vs mock")
+
+
+```
+
+### HM078
+```{bash,k72, eval=FALSE}
+
+
+
+### HM078 ### 
+y <- list(
+  '24 hpi' = row.names(t_R24f), 
+  '48 hpi' = row.names(t_R48f), 
+  '72 hpi' = row.names(t_R72f))
+ggvenn(y, c('24 hpi','48 hpi','72 hpi'),fill_color = c("#999999", "#E69F00", "#56B4E9", "#009E73"),
+       stroke_size = 0.5, set_name_size = 6, text_size = 6,show_percentage = F)+
+  ggtitle("DE genes for HM078 inoculated vs mock")
+
+### HM078 upregulated ### 
+t_R24_up<-filter(t_R24f, logFC>= 0)
+t_R48_up<-filter(t_R48f, logFC>= 0)
+t_R72_up<-filter(t_R72f, logFC>= 0)
+a <- list(
+  '24 hpi' = row.names(t_R24_up), 
+  '48 hpi' = row.names(t_R48_up), 
+  '72 hpi' = row.names(t_R72_up))
+ggvenn(a, c('24 hpi','48 hpi','72 hpi'),fill_color = c("#999999", "#E69F00", "#56B4E9", "#009E73"),
+       stroke_size = 0.5, set_name_size = 6, text_size = 6,show_percentage = F)+
+  ggtitle("Upregulated DE genes for HM078 inoculated vs mock")
+
+### HM078 downregulated ### 
+t_R24_d<-filter(t_R24f, logFC<= 0)
+t_R48_d<-filter(t_R48f, logFC<= 0)
+t_R72_d<-filter(t_R72f, logFC<= 0)
+a <- list(
+  '24 hpi' = row.names(t_R24_d), 
+  '48 hpi' = row.names(t_R48_d), 
+  '72 hpi' = row.names(t_R72_d))
+ggvenn(a, c('24 hpi','48 hpi','72 hpi'),fill_color = c("#999999", "#E69F00", "#56B4E9", "#009E73"),
+       stroke_size = 0.5,set_name_size = 6, text_size = 6,show_percentage = F, show_elements=F)+
+  ggtitle("Downregulated DE genes for HM078 inoculated vs mock")
+```
+
+
+## Heatmaps {.tabset .tabset-fade .tabset-pills}
+
+### SA/JA/ET pathways
+```{bash,k81, eval=FALSE}
+# GET ALL DATA
+library(readxl)
+r1<-read_excel("/Users/jakebotkin/Desktop/RNA-SEQ-MS-files/ALL_DEGs_logFC1_FDR0.05.xlsx")
+
+#JA biosynthesis
+setwd("/Users/jakebotkin/Desktop")
+
+genes<-c('MtrunA17_Chr7g0272791','MtrunA17_Chr4g0033171','MtrunA17_Chr3g0120071','MtrunA17_Chr8g0343021','MtrunA17_Chr8g0343011','MtrunA17_Chr4g0033181','MtrunA17_Chr8g0344201','MtrunA17_Chr1g0154381','MtrunA17_Chr3g0141271','MtrunA17_Chr5g0394861','MtrunA17_Chr4g0070561','MtrunA17_Chr4g0067521','MtrunA17_Chr2g0295671')
+
+mycts<-as.data.frame(norm_cpm[JA_bio_genes,])
+
+#FILTER DEGs for this gene list:
+mydata<- r1 %>% filter(r1$Genes %in% genes)
+
+mydata$info<-'JA_biosynthesis'
+  
+Heatmap(mycts,cluster_rows=T,cluster_columns=F, column_labels=colnames(mycts), #norm relative exp values
+        row_names_gp = gpar(fontsize = 12),column_names_gp = gpar(fontsize = 12))
+
+# JA signaling
+genes<-c('MtrunA17_Chr5g0399861','MtrunA17_Chr5g0399881','MtrunA17_Chr6g0478581','MtrunA17_Chr6g0486641','MtrunA17_Chr5g0411341')
+mycts<-as.data.frame(norm_cpm[genes,])
+
+Heatmap(mycts,cluster_rows=T,cluster_columns=F, column_labels=colnames(mycts), #norm relative exp values
+        row_names_gp = gpar(fontsize = 12),column_names_gp = gpar(fontsize = 12))
+
+#FILTER DEGs for this gene list:
+mydata1<- r1 %>% filter(r1$Genes %in% genes)
+
+#SA biosynthesis
+genes<-c('MtrunA17_Chr5g0448361','MtrunA17_Chr1g0181091','MtrunA17_Chr1g0199551')
+
+#FILTER DEGs for this gene list:
+mydata2<- r1 %>% filter(r1$Genes %in% genes)
+mydata2$info<-'SA_biosynthesis'
+
+Heatmap(mycts,cluster_rows=T,cluster_columns=F, column_labels=colnames(mycts), #norm relative exp values
+        row_names_gp = gpar(fontsize = 12),column_names_gp = gpar(fontsize = 12))
+
+# SA signaling
+genes<-c('MtrunA17_Chr5g0442661','MtrunA17_Chr2g0291741','MtrunA17_Chr2g0297711','MtrunA17_Chr1g0171771','MtrunA17_Chr7g0256321','MtrunA17_Chr8g0384621','MtrunA17_Chr4g0072781','MtrunA17_Chr2g0295371','MtrunA17_Chr1g0190651','MtrunA17_Chr1g0190671','MtrunA17_Chr5g0397821','MtrunA17_Chr2g0295001','MtrunA17_Chr2g0295021','MtrunA17_Chr2g0295051','MtrunA17_Chr2g0295141','MtrunA17_Chr4g0067951','MtrunA17_Chr2g0295064')
+mycts<-as.data.frame(norm_cpm[genes,])
+
+#FILTER DEGs for this gene list:
+mydata3<- r1 %>% filter(r1$Genes %in% genes)
+mydata3$info<-'SA_signaling'
+Heatmap(mycts,cluster_rows=T,cluster_columns=F, column_labels=colnames(mycts), #norm relative exp values
+        row_names_gp = gpar(fontsize = 12),column_names_gp = gpar(fontsize = 12))
+
+# ET biosyntheis
+genes<-c('MtrunA17_Chr7g0270531','MtrunA17_Chr4g0054371','MtrunA17_Chr5g0400831','MtrunA17_Chr2g0289341')
+mycts<-as.data.frame(norm_cpm[genes,])
+#FILTER DEGs for this gene list:
+mydata4<- r1 %>% filter(r1$Genes %in% genes)
+Heatmap(mycts,cluster_rows=T,cluster_columns=F, column_labels=colnames(mycts), #norm relative exp values
+        row_names_gp = gpar(fontsize = 12),column_names_gp = gpar(fontsize = 12))
+
+# ET signaling
+genes<-c('MtrunA17_Chr4g0013831','MtrunA17_Chr7g0269631','MtrunA17_Chr1g0168161','MtrunA17_Chr1g0186431','MtrunA17_Chr1g0190021','MtrunA17_Chr7g0274831','MtrunA17_Chr7g0264231','MtrunA17_Chr5g0440591','MtrunA17_Chr2g0329151','MtrunA17_Chr1g0186741')
+mydata5<- r1 %>% filter(r1$Genes %in% genes)
+mycts<-as.data.frame(norm_cpm[genes,])
+#FILTER DEGs for this gene list:
+mydata<- r1 %>% filter(r1$Genes %in% genes)
+Heatmap(mycts,cluster_rows=T,cluster_columns=F, column_labels=colnames(mycts), #norm relative exp values
+        row_names_gp = gpar(fontsize = 12),column_names_gp = gpar(fontsize = 12))
+
+m<-rbind(mydata,mydata1,mydata2,mydata3,mydata4,mydata5)
+write_xlsx(m, path = "/Users/jakebotkin/Desktop/RNA-SEQ-MS-files/Hormones_SA_JA_ET_logFC1_FDR0.05.xlsx")
+
+```
+
+
+### QTL
+```{bash,k91, eval=FALSE}
+HEATMAP OF QTL 
+
+#normalized log counts of all genes # COMPARE within one gene, can't compare genes
+norm_cpm <- cpm(d, log=TRUE, normalized=TRUE)
+
+# RNPM1
+rnpm1 <- read.delim("/Users/jakebotkin/Desktop/RNA_seq/qtl_genes2.txt", head=F, sep="\t")
+rnpm1_list<-rnpm1$V1
+
+mydata<-as.data.frame(norm_cpm)
+mydata$genes<-row.names(mydata)
+
+#Filter for QTL genes 
+rnpm1_cpm<-as.data.frame(filter(mydata, mydata$genes %in% rnpm1_list))
+
+#Remove extra col 
+rnpm1_cpm<-rnpm1_cpm[,-37]
+
+rnpm1_cpm_m<-as.matrix(rnpm1_cpm)
+
+#PLOT
+?Heatmap
+Heatmap(rnpm1_cpm_m,cluster_rows=F,cluster_columns=F, column_labels=colnames(rnpm1_cpm),
+        heatmap_legend_param = list(title = 'Log cpm'),row_names_gp = gpar(fontsize = 8),
+        column_names_gp = gpar(fontsize = 8))
+```
+
+## gprofiler data {.tabset .tabset-fade .tabset-pills}
+
+### plot go terms in custom bar plot
+```{bash,k7110, eval=FALSE}
+library(ggplot2)
+library(readxl)
+library(forcats)
+library(dplyr)
+
+s1<-read_excel("/Users/jakebotkin/Desktop/RNA-SEQ-MS-files/gProfiler_data/A17_P_0.05_info.xlsx")
+r1<-read_excel("/Users/jakebotkin/Desktop/RNA-SEQ-MS-files/gProfiler_data/HM078_P_0.05_info.xlsx")
+
+str(s1)
+#bar plot for A17
+p<-ggplot(data=s1, aes(y=factor(term_name, levels=term_name[order(Source,term_size)]),
+                      x=term_size, fill = Source)) +
+  geom_col()+
+  xlab("Enriched GO Terms")+
+  ylab("")+
+  ggtitle("GSEA DEGs in susceptible")+
+  theme_classic(base_size =16)+
+  scale_x_continuous(n.breaks =6)
+p
+
+
+#bar plot for HM078
+p<-ggplot(data=r, aes(x=term_size, y=fct_reorder(term_name, term_size))) +
+  geom_col(aes(fill = Source))+
+  xlab("Enriched GO Terms")+
+  ylab("")+
+  ggtitle("GSEA DEGs in resistant")+
+  theme_classic(base_size =14)
+p
+```
+
+
+## NormCPM plot {.tabset .tabset-fade .tabset-pills}
+
+### PLOT all sample expression 
+```{bash,k7119, eval=FALSE}
+norm_cpm2<-as.data.frame(norm_cpm)
+
+#make data long
+norm_cpm3 <- norm_cpm2 %>% 
+  pivot_longer(cols = everything(), names_to = "samples", values_to = "cpm")
+
+#Make groups 
+norm_cpm3$Group <- substr(norm_cpm3$samples, 1, 5)
+
+p <- ggplot(norm_cpm3, aes(x=samples, y=cpm, color=Group)) +
+  geom_boxplot(alpha=0.5) +
+  ylab("Normalized log2 CPM")+
+  xlab("Sample ID")+
+  theme_classic(base_size =14)+
+  coord_flip()
+p
+
+min(norm_cp
+```
+
+
+
+## Single gene plots {.tabset .tabset-fade .tabset-pills}
+
+### Barplot
+```{bash,k7171, eval=FALSE}
+gene<-'MtrunA17_Chr3g0105371'
+counts<-as.numeric(norm_cpm[gene,])
+g<-as.data.frame(counts,row.names = samples,)
+g$grp<-exp$Group
+ggplot(g, aes(counts,grp, color=grp)) +
+  geom_col(show.legend = F)+
+  ggtitle(gene)+
+  xlab("Normalized CPM")+
+  ylab("Sample")
+counts<-as.numeric(d$counts[gene,])
+g<-as.data.frame(counts,row.names = samples,)
+g$grp<-exp$Group
+ggplot(g, aes(counts,grp, color=grp)) +
+  geom_col(show.legend = F)+
+  ggtitle(gene)
+
+```
+
+
+
+## {.tabset .tabset-fade .tabset-pills}
+
+###
+```{bash,k7141, eval=FALSE}
+
+```
+
+
+
+## {.tabset .tabset-fade .tabset-pills}
+
+###
+```{bash,k721, eval=FALSE}
+
+```
+
